@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KS5678 Solar Dashboard</title>
+<title>KS5689 Solar Dashboard</title>
 <style>
 :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0b1420;color:#eff6fa;--muted:#a9bdcc;--line:#2a4051;--mint:#76efbb}
 *{box-sizing:border-box} body{margin:0;background:radial-gradient(ellipse at top right,#163e3d,transparent 52%);min-height:100vh}
@@ -44,6 +44,8 @@ System</h1><p>Battery monitoring and converter control · Firebase /5689</p></di
 <section class="grid" aria-label="Live readings">
   <div class="card"><span class="label">Battery voltage</span><strong class="reading" id="battery">—</strong><small>Voltage1</small></div>
   <div class="card"><span class="label">Converter voltage</span><strong class="reading" id="converter">—</strong><small>Voltage2</small></div>
+  <div class="card"><span class="label">Solar voltage</span><strong class="reading" id="solarVoltage">—</strong><small>Voltage3</small></div>
+  <div class="card"><span class="label">Solar current</span><strong class="reading" id="solarCurrent">—</strong></div>
   <div class="card"><span class="label">Voltage-derived duty</span><strong class="reading" id="duty">—</strong><small>(Voltage2 ÷ 12 V) × 100</small></div>
   <div class="card"><span class="label">current estimate</span><strong class="reading" id="current">—</strong></div>
 </section>
@@ -68,8 +70,8 @@ System</h1><p>Battery monitoring and converter control · Firebase /5689</p></di
   <h2 id="reports">Historical reports</h2>
   <p>Records one sample per minute in Firebase while this dashboard is online and open.</p>
   <div class="actions">
-    <button id="excel" class="primary" disabled>Download Excel</button>
-    <button id="pdf" disabled>Download PDF</button>
+    <button id="excel" class="primary" disabled>Download History Excel</button>
+    <button id="pdf" disabled>Download History PDF</button>
   </div>
   <p id="historyStatus" role="status">Waiting to record measurements.</p>
   <p id="exportStatus" role="status" hidden></p>
@@ -101,6 +103,7 @@ const basePath = "5689";
 const referenceVoltage = 12;
 const CurrentMin = 1.00;
 const CurrentMax = 1.50;
+const solarCurrentValue = 0.25;
 let connected = false;
 let ready = false;
 let pwmPending = false;
@@ -108,19 +111,24 @@ let driverPending = false;
 let editing = false;
 let data = {};
 let exportPending = false;
-const telemetryKeys = ["Voltage1", "Voltage2", "PWM", "Driver"];
+const telemetryKeys = ["Voltage1", "Voltage2", "Voltage3", "Current2", "PWM", "Driver"];
 const columns = ["Date (IST)", "Time (IST)", "Battery voltage (V)", "Converter voltage (V)",
-  "Voltage-derived duty (%)", "Current estimate (A)", "Firebase PWM setting (%)",
-  "Driver command"];
+  "Solar voltage (V)", "Solar current (A)", "Voltage-derived duty (%)",
+  "Current estimate (A)", "Firebase PWM setting (%)", "Driver command"];
 
 function makeRecord(values, timestamp) {
   const converterVoltage = numeric(values.Voltage2);
+  const solarVoltage = numeric(values.Voltage3);
+  const current2Available = numeric(values.Current2) !== null;
   const ratio = converterVoltage === null ? null : converterVoltage / referenceVoltage;
   const driver = numeric(values.Driver);
   return {
     timestamp,
     batteryVoltage: numeric(values.Voltage1),
     converterVoltage,
+    solarVoltage,
+    solarCurrent: solarVoltage !== null && solarVoltage > 2 && current2Available
+      ? solarCurrentValue : null,
     dutyCycle: ratio === null ? null : ratio * 100,
     Current: ratio === null ? null :
       CurrentMin + Math.min(1, Math.max(0, ratio)) * (CurrentMax - CurrentMin),
@@ -147,8 +155,9 @@ function reportRow(record) {
     record.operatingStatus === "Online / Driver ON" ? 1 :
       record.operatingStatus === "Online / Driver OFF" ? 0 : null);
   return [`${parts.year}-${parts.month}-${parts.day}`, `${parts.hour}:${parts.minute}:${parts.second}`,
-    number(record.batteryVoltage), number(record.converterVoltage), number(record.dutyCycle),
-    number(record.Current), record.pwmCommand ?? "", driverLabel(driver)];
+    number(record.batteryVoltage), number(record.converterVoltage), number(record.solarVoltage),
+    number(record.solarCurrent), number(record.dutyCycle), number(record.Current),
+    record.pwmCommand ?? "", driverLabel(driver)];
 }
 
 function loadScript(url) {
@@ -174,7 +183,7 @@ async function downloadExcel(rows, filename) {
 async function downloadPdf(rows, filename) {
   if (!window.jspdf) await loadScript("https://cdn.jsdelivr.net/npm/jspdf@3.0.3/dist/jspdf.umd.min.js");
   const doc = new window.jspdf.jsPDF({ orientation: "landscape", format: "a4" });
-  const widths = [29, 23, 32, 33, 42, 37, 42, 32];
+  const widths = [26, 20, 27, 29, 25, 27, 32, 31, 31, 24];
   const header = columns;
   let y;
   function drawRow(cells, heading = false) {
@@ -192,10 +201,10 @@ async function downloadPdf(rows, filename) {
   function pageHeader() {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(17);
-    doc.text("KS5678 Solar Power History", 11, 15);
+    doc.text("KS5689 Solar Power History", 11, 15);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
-    doc.text("Times in IST. Current is simulated. Duty is derived from converter voltage.", 11, 23);
+    doc.text("Times in IST. Solar current is 0.25 A when Voltage3 > 2 V and Current2 is available.", 11, 23);
     y = 35;
     drawRow(header, true);
   }
@@ -222,6 +231,8 @@ function render() {
   const readings = makeRecord(live ? data : {});
   display("battery", readings.batteryVoltage, " V");
   display("converter", readings.converterVoltage, " V");
+  display("solarVoltage", readings.solarVoltage, " V");
+  display("solarCurrent", readings.solarCurrent, " A");
   display("duty", readings.dutyCycle, "%");
   display("current", readings.Current, " A");
 
@@ -265,7 +276,8 @@ async function start() {
 
   async function logSample() {
     if (!connected || !ready || logging ||
-        (numeric(data.Voltage1) === null && numeric(data.Voltage2) === null)) return;
+        (numeric(data.Voltage1) === null && numeric(data.Voltage2) === null &&
+          numeric(data.Voltage3) === null)) return;
     const minute = Math.floor((Date.now() + serverOffset) / 60000) * 60000;
     if (minute === lastLoggedMinute) return;
     logging = true;
@@ -302,7 +314,7 @@ async function start() {
       }
       records.sort((a, b) => a.timestamp - b.timestamp);
       const rows = records.map(reportRow);
-      const filename = "KS5678_Solar_History_" + new Date().toISOString().slice(0, 10);
+      const filename = "KS5689_Solar_History_" + new Date().toISOString().slice(0, 10);
       if (format === "xlsx") await downloadExcel(rows, filename);
       else await downloadPdf(rows, filename);
       exportStatus.textContent = "Report downloaded · " + rows.length + " samples.";
